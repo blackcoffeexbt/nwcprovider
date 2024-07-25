@@ -1,6 +1,6 @@
 import secp256k1
 
-async def m001_initial(db):
+async def m001_initial_keys(db):
     """
     Initial tables
     """
@@ -16,6 +16,7 @@ async def m001_initial(db):
         );
         """
     )
+async def m0011_initial(db):
 
     await db.execute(
         f"""
