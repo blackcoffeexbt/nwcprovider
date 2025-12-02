@@ -1,10 +1,10 @@
 from http import HTTPStatus
 
-import secp256k1
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from lnbits.core.models import WalletTypeInfo
 from lnbits.decorators import check_admin, require_admin_key
+from pynostr.key import PrivateKey
 
 from .crud import (
     create_nwc,
@@ -88,11 +88,13 @@ async def api_get_nwc(
     nwc = await get_nwc(
         GetNWC(pubkey=pubkey, wallet=wallet_id, include_expired=include_expired)
     )
+
     if not nwc:
-        raise Exception("Pubkey has no associated wallet")
+        raise ValueError("Pubkey has no associated wallet")
     res = NWCGetResponse(
         data=nwc, budgets=await get_budgets_nwc(GetBudgetsNWC(pubkey=pubkey))
     )
+
     return res
 
 
@@ -123,11 +125,11 @@ async def api_get_pairing_url(req: Request, secret: str) -> str:
                 scheme = "wss"
             netloc += "/nostrclient/api/v1/relay"
             relay = f"{scheme}://{netloc}"
-    psk = secp256k1.PrivateKey(bytes.fromhex(pprivkey))
-    ppk = psk.pubkey
+    psk = PrivateKey.from_hex(pprivkey)
+    ppk = psk.public_key
     if not ppk:
         raise Exception("Error generating pubkey")
-    ppubkey = ppk.serialize().hex()[2:]
+    ppubkey = ppk.hex()
     url = "nostr+walletconnect://"
     url += ppubkey
     url += "?relay=" + relay

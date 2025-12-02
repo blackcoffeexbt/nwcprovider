@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import hashlib
 import json
 import random
@@ -7,13 +6,11 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any, Union
 
-import secp256k1
-from Cryptodome import Random
-from Cryptodome.Cipher import AES
-from Cryptodome.Util.Padding import pad, unpad
+from coincurve import PublicKeyXOnly
 from lnbits.helpers import encrypt_internal_message
 from lnbits.settings import settings
 from loguru import logger
+from pynostr.key import PrivateKey
 from websockets.legacy.client import connect
 
 
@@ -75,7 +72,7 @@ class MainSubscription:
 class NWCServiceProvider:
     def __init__(
         self,
-        private_key: str | None = None,
+        private_key_hex: str | None = None,
         relay: str | None = None,
         handle_missed_events: int = 0,
     ):
@@ -90,15 +87,18 @@ class NWCServiceProvider:
             )
         self.relay = relay
 
-        if not private_key:  # Create random key
-            private_key = bytes.hex(secp256k1._gen_private_key())
+        if not private_key_hex:  # Create random key
+            self.private_key = PrivateKey()
+            self.private_key_hex = self.private_key.hex()
+        else:
+            self.private_key = PrivateKey.from_hex(private_key_hex)
+            self.private_key_hex = private_key_hex
 
-        self.private_key = secp256k1.PrivateKey(bytes.fromhex(private_key))
-        self.private_key_hex = private_key
-        self.public_key = self.private_key.pubkey
+        self.public_key = self.private_key.public_key
         if not self.public_key:
             raise Exception("Invalid public key")
-        self.public_key_hex = self.public_key.serialize().hex()[2:]
+
+        self.public_key_hex = self.public_key.hex()
 
         # List of supported methods
         self.supported_methods: list[str] = []
@@ -314,7 +314,7 @@ class NWCServiceProvider:
         nwc_pubkey = event["pubkey"]
         content = event["content"]
         # Decrypt the content
-        content = self._decrypt_content(content, nwc_pubkey)
+        content = self.private_key.decrypt_message(content, nwc_pubkey)
         # Deserialize content
         content = json.loads(content)
         # Handle request
@@ -364,7 +364,9 @@ class NWCServiceProvider:
             # Reference user
             res["tags"].append(["p", nwc_pubkey])
             # Finalize response event
-            res["content"] = self._encrypt_content(res["content"], nwc_pubkey)
+            res["content"] = self.private_key.encrypt_message(
+                res["content"], nwc_pubkey
+            )
             self._sign_event(res)
 
             # Register response for this request, so we knows it is not stale
@@ -513,65 +515,6 @@ class NWCServiceProvider:
                 logger.debug("Reconnecting to NWC relay...")
                 await self._ratelimit("connecting")
 
-    def _encrypt_content(
-        self, content: str, pubkey_hex: str, iv_seed: int | None = None
-    ) -> str:
-        """
-        Encrypts the content for the given public key
-
-        Args:
-            content (str): The content to be encrypted.
-            pubkey_hex (str): The public key in hex format.
-
-        Returns:
-            str: The encrypted content.
-        """
-        pubkey = secp256k1.PublicKey(bytes.fromhex("02" + pubkey_hex), True)
-        shared = pubkey.tweak_mul(bytes.fromhex(self.private_key_hex)).serialize()[1:]
-        # random iv (16B)
-        if not iv_seed:
-            iv = Random.new().read(AES.block_size)
-        else:
-            iv = hashlib.sha256(iv_seed.to_bytes(32, byteorder="big")).digest()
-            iv = iv[: AES.block_size]
-
-        aes = AES.new(shared, AES.MODE_CBC, iv)
-
-        content_bytes = content.encode("utf-8")
-
-        # padding
-        content_bytes = pad(content_bytes, AES.block_size)
-
-        encrypted_b64 = base64.b64encode(aes.encrypt(content_bytes)).decode("ascii")
-        iv_b64 = base64.b64encode(iv).decode("ascii")
-        encrypted_content = encrypted_b64 + "?iv=" + iv_b64
-        return encrypted_content
-
-    def _decrypt_content(self, content: str, pubkey_hex: str) -> str:
-        """
-        Decrypts the content for the given public key
-
-        Args:
-            content (str): The encrypted content.
-            pubkey_hex (str): The public key in hex format.
-
-        Returns:
-            str: The decrypted content.
-        """
-        pubkey = secp256k1.PublicKey(bytes.fromhex("02" + pubkey_hex), True)
-
-        shared = pubkey.tweak_mul(bytes.fromhex(self.private_key_hex)).serialize()[1:]
-        # extract iv and content
-        (encrypted_content_b64, iv_b64) = content.split("?iv=")
-        encrypted_content = base64.b64decode(encrypted_content_b64.encode("ascii"))
-        iv = base64.b64decode(iv_b64.encode("ascii"))
-        # Decrypt
-        aes = AES.new(shared, AES.MODE_CBC, iv)
-        decrypted_bytes = aes.decrypt(encrypted_content)
-        decrypted_bytes = unpad(decrypted_bytes, AES.block_size)
-        decrypted = decrypted_bytes.decode("utf-8")
-        return decrypted
-
     def _verify_event(self, event: dict) -> bool:
         """
         Verify the event signature
@@ -596,10 +539,8 @@ class NWCServiceProvider:
         if event_id != event["id"]:  # Invalid event id
             return False
         pubkey_hex = event["pubkey"]
-        pubkey = secp256k1.PublicKey(bytes.fromhex("02" + pubkey_hex), True)
-        if not pubkey.schnorr_verify(
-            bytes.fromhex(event_id), bytes.fromhex(event["sig"]), None, raw=True
-        ):
+        pubkey = PublicKeyXOnly(bytes.fromhex(pubkey_hex))
+        if not pubkey.verify(bytes.fromhex(event["sig"]), bytes.fromhex(event_id)):
             return False
         return True
 
@@ -628,10 +569,8 @@ class NWCServiceProvider:
         event["id"] = event_id
         event["pubkey"] = self.public_key_hex
 
-        signature = (
-            self.private_key.schnorr_sign(bytes.fromhex(event_id), None, raw=True)
-        ).hex()
-        event["sig"] = signature
+        signature = self.private_key.sign(bytes.fromhex(event_id))
+        event["sig"] = signature.hex()  # type: ignore
         return event
 
     async def cleanup(self):
