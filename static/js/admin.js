@@ -30,10 +30,7 @@ window.app = Vue.createApp({
     fetchConfig() {
       this.entries = []
       LNbits.api
-        .request(
-          'GET',
-          '/nwcprovider/api/v1/config'
-        )
+        .request('GET', '/nwcprovider/api/v1/config')
         .then(response => {
           this.config = response.data
           console.log('Config fetched:', this.config)
