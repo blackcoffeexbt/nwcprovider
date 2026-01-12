@@ -32,8 +32,7 @@ window.app = Vue.createApp({
       LNbits.api
         .request(
           'GET',
-          '/nwcprovider/api/v1/config',
-          this.g.user.wallets[0].adminkey
+          '/nwcprovider/api/v1/config'
         )
         .then(response => {
           const newEntries = []
@@ -59,7 +58,7 @@ window.app = Vue.createApp({
         const response = await LNbits.api.request(
           'POST',
           '/nwcprovider/api/v1/config',
-          this.g.user.wallets[0].adminkey,
+          null,
           data
         )
         Quasar.Notify.create({
