@@ -4,7 +4,7 @@ window.app = Vue.createApp({
   delimiters: ['${', '}'],
   data: function () {
     return {
-      entries: [],
+      config: {},
       columns: [
         {
           name: 'key',
@@ -36,15 +36,8 @@ window.app = Vue.createApp({
           this.g.user.wallets[0].adminkey
         )
         .then(response => {
-          const newEntries = []
-          for (const [key, value] of Object.entries(response.data)) {
-            newEntries.push({
-              key: key,
-              value: value
-            })
-          }
-          this.entries.length = 0
-          this.entries.push(...newEntries)
+          this.config = response.data
+          console.log('Config fetched:', this.config)
         })
         .catch(function (error) {
           console.error('Error fetching config:', error)
@@ -52,9 +45,10 @@ window.app = Vue.createApp({
     },
     async saveConfig() {
       const data = {}
-      for (const entry of this.entries) {
-        data[entry.key] = entry.value
+      for (const [key, value] of Object.entries(this.config)) {
+        data[key] = value
       }
+      console.log('Saving config:', data)
       try {
         const response = await LNbits.api.request(
           'POST',
